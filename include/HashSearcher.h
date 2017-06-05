@@ -13,17 +13,15 @@ using namespace std;
 //using namespace __gnu_cxx;
 
 typedef size_t HashType_t;
-typedef unordered_map<HashType_t, vector<HashType_t> > StoreType_t;
+struct StoredItem_t{
+    HashType_t code;
+    int diff_bit;
 
-inline int diffbit(HashType_t a, HashType_t b) {
-    int r = 0;
-    HashType_t x = a ^ b;
-    while (x) {
-        if (x & 0x1) r++;
-        x >>= 1;
+    bool operator < (const StoredItem_t& b) const {
+        return diff_bit < b.diff_bit;
     }
-    return r;
 };
+typedef unordered_map<HashType_t, vector<StoredItem_t> > StoreType_t;
 
 class HashSearcher {
     public:
@@ -31,7 +29,26 @@ class HashSearcher {
             for (size_t i=0; i<8; ++i) {
                 _masks.push_back( (0xFFLL << (i * 8LL)) );
             }
+
+            for (size_t i=0; i<0xFFFFLL; ++i) {
+                __db[i] = 0;
+                size_t test = i;
+                while (test) {
+                    if (test & 0x1) __db[i] ++;
+                    test >>= 1;
+                }
+            }
         }
+
+        int diffbit(HashType_t a, HashType_t b) {
+            int r = 0;
+            HashType_t x = a ^ b;
+            while (x) {
+                r+=__db[ x & 0xFFFFLL ];
+                x >>= 16;
+            }
+            return r;
+        };
 
         vector<HashType_t> search(HashType_t query) {
             _performance_counter = 0;
@@ -58,14 +75,31 @@ class HashSearcher {
                 HashType_t hash = hashbuffer[i];
                 vector<HashType_t> buckets = get_buckets(hash);
                 for (size_t i=0; i<buckets.size(); ++i) {
-                    _repo[buckets[i]].push_back(hash);
+                    StoredItem_t item;
+                    item.code = hash;
+                    item.diff_bit = 0;
+                    if (_repo[buckets[i]].size() > 0) {
+                        item.diff_bit = diffbit(_repo[buckets[i]][0].code, hash);
+                    }
+                    _repo[buckets[i]].push_back(item);
                 }
             }
 
             fprintf(stderr, "begin reorder. buckets.size=%lu\n", _repo.size());
             for (StoreType_t::iterator it = _repo.begin(); it != _repo.end(); ++it) {
-                //sort(it->second.begin(), it->second.end(), DiffBitComparer_t(it->second[0]));
                 sort(it->second.begin(), it->second.end());
+
+                // debug list.
+                /*
+                vector<StoredItem_t>& v = it->second;
+                fprintf(stderr, "mask [%lu] : ", it->first);
+                for (size_t i=0; i<v.size(); ++i) {
+                    if (i==0 || v[i].diff_bit!=v[i-1].diff_bit) {
+                        fprintf(stderr, "(%lu:%d)", i, v[i].diff_bit);
+                    }
+                }
+                fprintf(stderr, "  total:%lu\n", v.size());
+                */
             }
         }
 
@@ -83,19 +117,26 @@ class HashSearcher {
         }
 
         void locate(HashType_t hash, HashType_t bucket, unordered_set<HashType_t>* pool) {
-            const vector<HashType_t>& l = _repo.find(bucket)->second;
+            const vector<StoredItem_t>& l = _repo.find(bucket)->second;
             if (l.size() == 0) return ;
 
-            int db = diffbit(hash, l[0]);
+            int db = diffbit(hash, l[0].code);
 
             // add bi-search later.
-            //int db_begin = db - _diff_bit;
-            //int db_end = db + diff_bit;
+            StoredItem_t lower, upper;
+            lower.diff_bit = db - _diff_bit;
+            upper.diff_bit = db + _diff_bit;
 
-            for (size_t i=0; i<l.size(); ++i) {
+            vector<StoredItem_t>::const_iterator beg = lower_bound(l.begin(), l.end(), lower);
+            vector<StoredItem_t>::const_iterator end = upper_bound(l.begin(), l.end(), upper);   
+
+            //fprintf(stderr, "vector_size : %lu\n", l.size());
+            //fprintf(stderr, "bisearch_size : %ld\n", end - beg);
+
+            for (vector<StoredItem_t>::const_iterator it=beg; it != end; it++) {
                 _performance_counter ++;
-                if (diffbit(l[i], hash) <= _diff_bit) {
-                    pool->insert(l[i]);
+                if (diffbit(it->code, hash) <= _diff_bit) {
+                    pool->insert(it->code);
                 }
             }
             return ;
@@ -106,19 +147,7 @@ class HashSearcher {
         vector<HashType_t> _masks;
         size_t _performance_counter;
 
-        struct DiffBitComparer_t {
-            DiffBitComparer_t(HashType_t base) {
-                _base = base;
-            }
-
-            bool operator () (HashType_t a, HashType_t b) const {
-                int dba = diffbit(a, _base);
-                int dbb = diffbit(b, _base);
-                return dba < dbb;
-            }
-
-            HashType_t _base;
-        };
+        int __db[0xFFFF];
 };
 
 #endif
