@@ -6,28 +6,38 @@
 
 #include <vector>
 #include <algorithm>
+#include <string>
 using namespace std;
 
 #include <unordered_set>
 #include <unordered_map>
-//using namespace __gnu_cxx;
+
+string bit_string(size_t a) {
+    string s = "";
+    for (int i=0; i<64; ++i) {
+        if (a & 1) {
+            s = "1" + s;
+        } else {
+            s = "0" + s;
+        }
+        a >>= 1;
+    }
+    return s;
+}
 
 typedef size_t HashType_t;
 struct StoredItem_t{
     HashType_t code;
-    int diff_bit;
-
-    bool operator < (const StoredItem_t& b) const {
-        return diff_bit < b.diff_bit;
-    }
+    size_t index;
 };
 typedef unordered_map<HashType_t, vector<StoredItem_t> > StoreType_t;
 
 class HashSearcher {
     public:
         HashSearcher() {
-            for (size_t i=0; i<8; ++i) {
-                _masks.push_back( (0xFFLL << (i * 8LL)) );
+            _current_max_index = 0;
+            for (size_t i=0; i<4; ++i) {
+                _masks.push_back( (0xFFFFLL << (i * 16LL)) );
             }
 
             for (size_t i=0; i<0xFFFFLL; ++i) {
@@ -41,21 +51,20 @@ class HashSearcher {
         }
 
         int diffbit(HashType_t a, HashType_t b) {
-            int r = 0;
             HashType_t x = a ^ b;
-            while (x) {
-                r+=__db[ x & 0xFFFFLL ];
-                x >>= 16;
-            }
-            return r;
+            return __db[ x & 0xFFFFLL ] + __db[ (x>>16) & 0xFFFFLL ] + __db[ (x>>32) & 0xFFFFLL] + __db[ (x>>48) & 0xFFFFLL ];
         };
 
-        vector<HashType_t> search(HashType_t query) {
+        vector<HashType_t> search(HashType_t query, int diff_bit) {
             _performance_counter = 0;
-            vector<HashType_t> buckets = get_buckets(query);
+
+            int max_min_bucket_diff = diff_bit / 4;
             unordered_set<HashType_t> ans_set;
+
+            vector<HashType_t> buckets = get_buckets(query);
             for (size_t i=0; i<buckets.size(); ++i) {
-                locate( query, buckets[i], &ans_set );
+                //fprintf(stderr, "try : %lu\n", buckets[i]);
+                dfs_locate(query, buckets[i],  max_min_bucket_diff, diff_bit, &ans_set, i*16, (i+1)*16);
             }
             vector<HashType_t> ans;
             for (unordered_set<HashType_t>::iterator it=ans_set.begin(); it!=ans_set.end(); ++it) {
@@ -64,8 +73,7 @@ class HashSearcher {
             return ans;
         }
 
-        void build(HashType_t* hashbuffer, size_t count, int diff_bit) {
-            _diff_bit = diff_bit;
+        void build(HashType_t* hashbuffer, size_t count) {
             _repo.clear();
 
             for (size_t i=0; i<count; ++i) {
@@ -77,33 +85,24 @@ class HashSearcher {
                 for (size_t i=0; i<buckets.size(); ++i) {
                     StoredItem_t item;
                     item.code = hash;
-                    item.diff_bit = 0;
-                    if (_repo[buckets[i]].size() > 0) {
-                        item.diff_bit = diffbit(_repo[buckets[i]][0].code, hash);
-                    }
+                    item.index = i;
                     _repo[buckets[i]].push_back(item);
                 }
             }
-
-            fprintf(stderr, "begin reorder. buckets.size=%lu\n", _repo.size());
-            for (StoreType_t::iterator it = _repo.begin(); it != _repo.end(); ++it) {
-                sort(it->second.begin(), it->second.end());
-
-                // debug list.
-                /*
-                vector<StoredItem_t>& v = it->second;
-                fprintf(stderr, "mask [%lu] : ", it->first);
-                for (size_t i=0; i<v.size(); ++i) {
-                    if (i==0 || v[i].diff_bit!=v[i-1].diff_bit) {
-                        fprintf(stderr, "(%lu:%d)", i, v[i].diff_bit);
-                    }
-                }
-                fprintf(stderr, "  total:%lu\n", v.size());
-                */
-            }
+            _current_max_index = count;
         }
 
-        bool insert(HashType_t new_item);
+        bool insert(HashType_t hash) {
+            vector<HashType_t> buckets = get_buckets(hash);
+            for (size_t i=0; i<buckets.size(); ++i) {
+                StoredItem_t item;
+                item.code = hash;
+                item.index = _current_max_index;
+                _repo[buckets[i]].push_back(item);
+            }
+            _current_max_index += 1;
+            return true;
+        }
 
         size_t get_performance_counter() const {return _performance_counter;}
 
@@ -116,35 +115,43 @@ class HashSearcher {
             return buckets;
         }
 
-        void locate(HashType_t hash, HashType_t bucket, unordered_set<HashType_t>* pool) {
+        void dfs_locate(HashType_t hash, HashType_t bucket, int bit_can_change, int diff, unordered_set<HashType_t>* pool, int begin_bit, int end_bit) {
+            // no changes.
+            //fprintf(stderr, "dfs: [%s] %d, %lu\n", bit_string(bucket).c_str(), bit_can_change, bucket);
+            locate(hash, bucket, pool, diff);
+            if (bit_can_change == 0) return;
+
+            for (int i=begin_bit; i<end_bit; ++i) {
+                size_t mask = (1LL << i);
+                HashType_t new_bucket = bucket ^ mask;
+                if (new_bucket != bucket) {
+                    // one bit changes.
+                    dfs_locate(hash, new_bucket, bit_can_change-1, diff-1, pool, begin_bit, end_bit);
+                }
+            }
+        }
+
+        void locate(HashType_t hash, HashType_t bucket, unordered_set<HashType_t>* pool, int threshold) {
+            if (_repo.find(bucket) == _repo.end()) {
+                return;
+            }
             const vector<StoredItem_t>& l = _repo.find(bucket)->second;
             if (l.size() == 0) return ;
 
-            int db = diffbit(hash, l[0].code);
-
-            // add bi-search later.
-            StoredItem_t lower, upper;
-            lower.diff_bit = db - _diff_bit;
-            upper.diff_bit = db + _diff_bit;
-
-            vector<StoredItem_t>::const_iterator beg = lower_bound(l.begin(), l.end(), lower);
-            vector<StoredItem_t>::const_iterator end = upper_bound(l.begin(), l.end(), upper);   
-
-            //fprintf(stderr, "vector_size : %lu\n", l.size());
-            //fprintf(stderr, "bisearch_size : %ld\n", end - beg);
-
-            for (vector<StoredItem_t>::const_iterator it=beg; it != end; it++) {
+            for (size_t i=0; i<l.size(); ++i) {
                 _performance_counter ++;
-                if (diffbit(it->code, hash) <= _diff_bit) {
-                    pool->insert(it->code);
+                int db = diffbit(l[i].code, hash);
+                if (db <= threshold) {
+                    pool->insert(l[i].code);
                 }
             }
             return ;
         }
 
-        int _diff_bit;
         StoreType_t _repo;
         vector<HashType_t> _masks;
+        size_t _current_max_index;
+
         size_t _performance_counter;
 
         int __db[0xFFFF];

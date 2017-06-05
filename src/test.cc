@@ -23,15 +23,7 @@ size_t random_i64() {
 }
 
 void debug_show_i64(size_t a) {
-    string s = "";
-    for (int i=0; i<64; ++i) {
-        if (a & 1) {
-            s = "1" + s;
-        } else {
-            s = "0" + s;
-        }
-        a >>= 1;
-    }
+    string s = bit_string(a);
     fprintf(stderr, "%s\n", s.c_str());
     return ;
 }
@@ -50,8 +42,9 @@ void Test_DiffBit() {
 }
 
 void Test_3000w() {
-
     const size_t Num = 30000000;
+    size_t query_count = 100000;
+
     BEGIN;
     size_t *hashs = new size_t [Num];
     for (size_t i=0; i<Num; ++i) {
@@ -64,28 +57,25 @@ void Test_3000w() {
     // build.
     BEGIN;
     HashSearcher dict;
-    dict.build(hashs, Num, 5);
+    dict.build(hashs, Num);
     SHOWDIFFTIME(build);
 
     // search.
     BEGIN;
     size_t ans_count = 0;
     size_t perf_count = 0;
-    size_t query_count = 2000;
     for (int i=0; i<query_count; ++i) {
         size_t query = hashs[random() % Num];
-        vector<size_t> ans = dict.search(query);
+        vector<size_t> ans = dict.search(query, 7);
         ans_count += ans.size();
         //fprintf(stderr, "ans : %lu\n", ans.size());
         perf_count += dict.get_performance_counter();
     }
+    SHOWDIFFTIME(in_dict_search);
     fprintf(stderr, "query : %lu\n", query_count);
     fprintf(stderr, "ans / query : %.2f\n", ans_count * 1.0 / query_count);
     fprintf(stderr, "perf / query : %.2f\n", perf_count * 1.0 / query_count);
     fprintf(stderr, "qps : %.2f\n", query_count * 1.0 / difft);
-
-    SHOWDIFFTIME(in_dict_search);
-    
 
     delete [] hashs;
     return ;
